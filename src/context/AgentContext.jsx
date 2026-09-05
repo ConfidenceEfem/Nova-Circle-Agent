@@ -41,15 +41,17 @@ export function AgentProvider({ children }) {
     }
   };
 
-  const scanNow = async () => {
-    setBusy(true);
-    try {
-      await api.scanNow();
-      await refreshStatus();
-    } finally {
-      setBusy(false);
-    }
-  };
+ const scanNow = async () => {
+  setBusy(true);
+  try {
+    await api.scanNow();
+    await refreshStatus();
+  } catch (err) {
+    alert(`Scan failed: ${err.message}`);
+  } finally {
+    setBusy(false);
+  }
+};
 
   return (
     <AgentContext.Provider value={{ running, toggle, lastScan, demoMode, connected, busy, scanNow, refreshStatus }}>

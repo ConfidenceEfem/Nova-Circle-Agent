@@ -41,4 +41,6 @@ export const api = {
   startAgent: () => request('/agent/start', { method: 'POST' }),
   stopAgent: () => request('/agent/stop', { method: 'POST' }),
   scanNow: () => request('/agent/scan-now', { method: 'POST' }),
+    previewOrder: (ticker) => request(`/preview/${ticker}`),
+  placeOrder: (ticker) => request(`/preview/${ticker}/place`, { method: 'POST' }),
 };

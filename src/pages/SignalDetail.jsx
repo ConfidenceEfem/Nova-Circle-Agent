@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import styled from 'styled-components';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, TrendingUp, TrendingDown, Gauge } from 'lucide-react';
@@ -62,12 +63,20 @@ const MetricRow = styled.div`
 const LegRow = styled.div`
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   padding: 10px 0;
   border-bottom: 1px solid ${colors.stroke};
   font-family: ${font.mono};
-  font-size: 13px;
+  font-size: 12.5px;
   &:last-child { border-bottom: none; }
+`;
+
+const PreviewBox = styled.div`
+  margin-top: 14px;
+  padding: 14px;
+  background: ${colors.panelRaised};
+  border-radius: 10px;
 `;
 
 const signalCopy = {
@@ -93,8 +102,18 @@ const signalCopy = {
 
 export default function SignalDetail() {
   const { ticker } = useParams();
+
+  // Every hook lives here, before ANY early return below — this is the
+  // part that broke last time. React requires hooks to run in the exact
+  // same order on every render; a hook declared after a conditional
+  // `return` works fine right up until the render path changes (e.g.
+  // loading finishes), at which point React's internal bookkeeping breaks
+  // and the whole tree unmounts silently. All state, always at the top.
   const { data: stock, loading, error, refetch } = useApi(() => api.getWatchlistTicker(ticker), [ticker]);
   const { data: risk } = useApi(api.getRiskSettings, []);
+  const [preview, setPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [placing, setPlacing] = useState(false);
 
   if (loading || !risk) return <Page><LoadingState label={`Loading ${ticker}…`} /></Page>;
   if (error) return <Page><ErrorState error={error} onRetry={refetch} /></Page>;
@@ -102,6 +121,32 @@ export default function SignalDetail() {
   const copy = signalCopy[stock.signal];
   const Icon = copy.icon;
   const trace = stock.trace || [];
+
+  const handlePreview = async () => {
+    setPreviewLoading(true);
+    try {
+      const result = await api.previewOrder(stock.ticker);
+      setPreview(result);
+    } catch (err) {
+      alert(`Preview failed: ${err.message}`);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handlePlace = async () => {
+    if (!confirm(`Place a real ${preview.strategy} on ${stock.ticker}? This sends a real order to your connected Alpaca account.`)) return;
+    setPlacing(true);
+    try {
+      const result = await api.placeOrder(stock.ticker);
+      alert(`Order placed: ${result.orderId || 'submitted'}`);
+      setPreview(null);
+    } catch (err) {
+      alert(`Order failed: ${err.message}`);
+    } finally {
+      setPlacing(false);
+    }
+  };
 
   return (
     <Page>
@@ -127,10 +172,10 @@ export default function SignalDetail() {
         <Section $mt="0">
           <SectionHead><SectionTitle>Signal inputs</SectionTitle></SectionHead>
           <Panel>
-            <MetricRow><span>Current price</span><span>${stock.price}</span></MetricRow>
-            <MetricRow><span>Earnings date</span><span>{stock.earningsDate} ({stock.earningsTime})</span></MetricRow>
-            <MetricRow><span>Implied move</span><span>{stock.impliedMove}%</span></MetricRow>
-            <MetricRow><span>Historical avg. move</span><span>{stock.historicalMove}%</span></MetricRow>
+            <MetricRow><span>Current price</span><span>{stock.price != null ? `$${stock.price}` : '—'}</span></MetricRow>
+            <MetricRow><span>Earnings date</span><span>{stock.earningsDate ? `${stock.earningsDate} (${stock.earningsTime})` : '—'}</span></MetricRow>
+            <MetricRow><span>Implied move</span><span>{stock.impliedMove != null ? `${stock.impliedMove}%` : '—'}</span></MetricRow>
+            <MetricRow><span>Historical avg. move</span><span>{stock.historicalMove != null ? `${stock.historicalMove}%` : '—'}</span></MetricRow>
             <MetricRow><span>Ratio (implied ÷ historical)</span><span>{stock.ratio != null ? stock.ratio.toFixed(2) : '—'}</span></MetricRow>
             <MetricRow><span>Confidence score</span><span>{stock.confidence}/100</span></MetricRow>
             <MetricRow><span>Last scanned</span><span>{stock.lastScanned}</span></MetricRow>
@@ -143,20 +188,39 @@ export default function SignalDetail() {
             {copy.strategy ? (
               <>
                 <StatLabel style={{ marginBottom: 10 }}>{copy.strategy} · exp. nearest post-earnings</StatLabel>
-                {stock.signal === 'sell_premium' ? (
-                  <>
-                    <LegRow><span style={{ color: colors.down }}>SELL</span> CALL · ~4% OTM</LegRow>
-                    <LegRow><span style={{ color: colors.up }}>BUY</span> CALL · further OTM (protection)</LegRow>
-                    <LegRow><span style={{ color: colors.down }}>SELL</span> PUT · ~4% OTM</LegRow>
-                    <LegRow><span style={{ color: colors.up }}>BUY</span> PUT · further OTM (protection)</LegRow>
-                  </>
-                ) : (
-                  <>
-                    <LegRow><span style={{ color: colors.up }}>BUY</span> CALL · ~3% OTM</LegRow>
-                    <LegRow><span style={{ color: colors.up }}>BUY</span> PUT · ~3% OTM</LegRow>
-                  </>
+
+                <Button style={{ width: '100%' }} $sm onClick={handlePreview} disabled={previewLoading}>
+                  {previewLoading ? 'Loading real quotes…' : 'Preview order'}
+                </Button>
+
+                {preview && (
+                  <PreviewBox>
+                    {preview.usingDemoData && (
+                      <p style={{ color: colors.down, fontSize: 12, marginBottom: 8 }}>
+                        Real options data isn't available right now — this preview is using demo data and can't be placed for real.
+                      </p>
+                    )}
+                    {preview.legs.map((l, i) => (
+                      <LegRow key={i}>
+                        <span>{l.side.toUpperCase()} {l.type.toUpperCase()} {l.strike} ({l.symbol})</span>
+                        <span>{l.price != null ? `$${l.price}` : 'no quote'}</span>
+                      </LegRow>
+                    ))}
+                    {preview.netPrice != null && (
+                      <p style={{ marginTop: 8, fontSize: 13, color: colors.paper }}>
+                        Net {preview.netType}: ${Math.abs(preview.netPrice).toFixed(2)} per spread
+                      </p>
+                    )}
+                    <Button
+                      style={{ width: '100%', marginTop: 10 }}
+                      $sm
+                      onClick={handlePlace}
+                      disabled={placing || preview.usingDemoData || !preview.priceable}
+                    >
+                      {placing ? 'Placing…' : 'Place this order for real'}
+                    </Button>
+                  </PreviewBox>
                 )}
-                <Button style={{ width: '100%', marginTop: 16 }} $sm>Preview order (demo only)</Button>
               </>
             ) : (
               <p style={{ fontSize: 13, color: colors.muted, lineHeight: 1.6 }}>
